@@ -9,52 +9,98 @@ app = Flask(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
 
 CITIES = {
-    "москва": "moskva",
-    "спб": "spb",
-    "сочи": "sochi",
-    "казань": "kazan",
-    "екатеринбург": "ekaterinburg",
-    "новосибирск": "novosibirsk",
-    "краснодар": "krasnodar",
-    "владивосток": "vladivostok"
+    "🇷🇺 Москва": "moskva",
+    "🇷🇺 Санкт-Петербург": "spb",
+    "🇷🇺 Сочи": "sochi",
+    "🇷🇺 Адлер": "adler",
+    "🇷🇺 Дагомыс": "dagomys",
+    "🇷🇺 Лоо": "loo",
+    "🇷🇺 Вардане": "vardane",
+    "🇷🇺 Краснодар": "krasnodar",
+    "🇷🇺 Киров": "kirov",
+    "🇷🇺 Луза": "luza",
+    "🇷🇺 Казань": "kazan",
+    "🇷🇺 Екатеринбург": "ekaterinburg",
+    "🇷🇺 Новосибирск": "novosibirsk",
+    "🇷🇺 Владивосток": "vladivostok"
 }
 
 @app.route('/')
 def home():
     return "OK", 200
 
-def send(chat_id, text):
+def send(chat_id, text, reply_markup=None):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if reply_markup:
+            data["reply_markup"] = reply_markup
+        requests.post(url, json=data, timeout=10)
     except:
         pass
 
-def search_avito(query, city):
-    url = f"https://www.avito.ru/{city}?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+def send_photo(chat_id, photo_url, caption):
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+        data = {"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+        requests.post(url, json=data, timeout=15)
+    except:
+        pass
+
+def search_avito(query, city_code):
+    url = f"https://www.avito.ru/{city_code}?q={query}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "ru-RU,ru;q=0.8,en;q=0.5"
+    }
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        ids = re.findall(r'itemId-(\d+)', r.text)
-        prices = re.findall(r'<span[^>]*itemprop="price"[^>]*content="(\d+)"', r.text)
-        titles = re.findall(r'<h3[^>]*>(.*?)</h3>', r.text)
+        html = r.text
+        
+        ids = re.findall(r'itemId-(\d+)', html)
+        prices = re.findall(r'<span[^>]*itemprop="price"[^>]*content="(\d+)"', html)
+        titles = re.findall(r'<h3[^>]*>(.*?)</h3>', html)
+        condition_new = re.findall(r'Новый', html)
+        photos = re.findall(r'<img[^>]*src="(https://[^"]+\.(jpg|png|jpeg))"', html)
         
         ads = []
-        for i in range(min(len(ids), 5)):
+        for i in range(min(len(ids), 10)):
             price = int(prices[i]) if i < len(prices) else 0
-            title = re.sub(r'<[^>]+>', '', titles[i])[:50] if i < len(titles) else "Товар"
+            title = re.sub(r'<[^>]+>', '', titles[i])[:60] if i < len(titles) else "Товар"
+            condition = "🆕 Новый" if i < len(condition_new) else "📦 Б/У"
+            photo = photos[i][0] if i < len(photos) else None
+            
             ads.append({
-                "title": title,
                 "price": price,
-                "url": f"https://www.avito.ru/{city}/{ids[i]}"
+                "url": f"https://www.avito.ru/{city_code}/{ids[i]}",
+                "title": title,
+                "condition": condition,
+                "photo": photo
             })
+        
         ads.sort(key=lambda x: x["price"])
-        return ads
-    except:
+        return ads[:5]
+    except Exception as e:
+        print(f"Ошибка: {e}")
         return []
+
+def city_keyboard():
+    buttons = []
+    row = []
+    for name, code in CITIES.items():
+        row.append({"text": name, "callback_data": f"city_{code}"})
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return {"inline_keyboard": buttons}
 
 def main():
     last_id = 0
+    user_cities = {}
+    user_queries = {}
     print("✅ Бот запущен!")
     
     while True:
@@ -65,64 +111,73 @@ def main():
             if data.get("ok"):
                 for upd in data["result"]:
                     last_id = upd["update_id"] + 1
-                    msg = upd.get("message")
-                    if msg:
-                        chat_id = msg["chat"]["id"]
-                        text = msg.get("text", "").strip().lower()
+                    
+                    if "callback_query" in upd:
+                        cb = upd["callback_query"]
+                        chat_id = str(cb["message"]["chat"]["id"])
+                        cb_data = cb["data"]
                         
-                        # Обработка команд
+                        if cb_data.startswith("city_"):
+                            city_code = cb_data.replace("city_", "")
+                            city_name = next((k for k, v in CITIES.items() if v == city_code), city_code)
+                            user_cities[chat_id] = city_code
+                            query = user_queries.get(chat_id, "")
+                            
+                            if query:
+                                send(chat_id, f"🔍 Ищу <b>{query}</b> в <b>{city_name}</b>...")
+                                ads = search_avito(query, city_code)
+                                
+                                if ads:
+                                    for ad in ads:
+                                        caption = f"🏆 <b>{ad['title']}</b>\n💰 {ad['price']:,} ₽\n📋 {ad['condition']}\n🔗 <a href='{ad['url']}'>Открыть</a>"
+                                        if ad['photo']:
+                                            send_photo(chat_id, ad['photo'], caption)
+                                        else:
+                                            send(chat_id, caption)
+                                        time.sleep(0.5)
+                                else:
+                                    send(chat_id, f"❌ Ничего не найдено для <b>{query}</b> в <b>{city_name}</b>")
+                            else:
+                                send(chat_id, "❌ Сначала напишите, что искать")
+                        
+                        requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", json={"callback_query_id": cb["id"]})
+                    
+                    elif "message" in upd:
+                        msg = upd["message"]
+                        chat_id = str(msg["chat"]["id"])
+                        text = msg.get("text", "").strip()
+                        
                         if text == "/start":
-                            description = """
-🔍 <b>AVITO HUNTER</b> — бот для поиска выгодных предложений на Авито
+                            cities_list = "\n".join(list(CITIES.keys())[:8] + ["..."] + list(CITIES.keys())[-4:])
+                            description = f"""
+🔍 <b>AVITO HUNTER</b>
 
-<b>📌 КАК ЭТО РАБОТАЕТ:</b>
-1️⃣ Ты пишешь <b>товар и город</b>
-2️⃣ Бот ищет объявления на Авито
-3️⃣ Сортирует по цене (от дешёвых к дорогим)
-4️⃣ Присылает ссылки на лучшие варианты
+<b>🌍 Поддерживаются языки:</b>
+🇷🇺 Русский
+🇬🇧 Английский (iPhone, Samsung, Xiaomi)
 
-<b>📝 ПРИМЕРЫ ЗАПРОСОВ:</b>
-• <code>диваны москва</code>
-• <code>айфон спб</code>
-• <code>машина казань</code>
+<b>📝 КАК РАБОТАЕТ:</b>
+1️⃣ Напишите <b>название товара</b> (любым языком)
+2️⃣ Выберите <b>город</b>
+3️⃣ Получите <b>самые выгодные предложения</b>
+
+<b>📌 ПРИМЕРЫ:</b>
+• <code>диваны</code> или <code>sofa</code>
+• <code>iphone 13</code>
 • <code>стиральная машина</code>
+• <code>Samsung TV</code>
 
-<b>🏙️ ДОСТУПНЫЕ ГОРОДА:</b>
-""" + ", ".join(CITIES.keys()) + """
-
-<b>💡 СОВЕТЫ:</b>
-• Пиши товар на русском
-• Город можно не указывать (по умолчанию Москва)
-• Чем точнее запрос, тем лучше результат
-
-<b>📞 ПРОБЛЕМЫ?</b>
-Просто напиши /start
+<b>🏙️ Доступные города ({len(CITIES)}):</b>
+{cities_list}
 """
                             send(chat_id, description)
                         
                         elif text.startswith("/"):
                             pass
                         
-                        # Обработка поискового запроса
                         elif text:
-                            parts = text.split()
-                            query = parts[0]
-                            city_name = parts[1] if len(parts) > 1 and parts[1] in CITIES else "москва"
-                            city_code = CITIES.get(city_name, "moskva")
-                            
-                            send(chat_id, f"🔍 Ищу <b>{query}</b> в <b>{city_name}</b>...")
-                            ads = search_avito(query, city_code)
-                            
-                            if ads:
-                                result = f"🏆 <b>САМЫЕ ВЫГОДНЫЕ {query.upper()}</b>\n\n"
-                                for i, ad in enumerate(ads, 1):
-                                    price_text = f"{ad['price']:,} ₽" if ad['price'] > 0 else "Цена не указана"
-                                    result += f"{i}. <b>{ad['title'][:40]}</b>\n"
-                                    result += f"   💰 {price_text}\n"
-                                    result += f"   🔗 {ad['url']}\n\n"
-                                send(chat_id, result)
-                            else:
-                                send(chat_id, f"❌ Ничего не найдено для <b>{query}</b> в <b>{city_name}</b>\n\nПопробуй другой запрос или город.")
+                            user_queries[chat_id] = text
+                            send(chat_id, "📍 <b>Выберите город:</b>", reply_markup=city_keyboard())
             time.sleep(0.5)
         except Exception as e:
             print(f"Ошибка: {e}")
