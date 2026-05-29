@@ -1,11 +1,12 @@
 import requests
 import re
 import time
+import json
 import os
 from flask import Flask
 from threading import Thread
 
-TOKEN = "8911252420:AAGZ2DrDreC8qSOr7Lyr5Azph60bU4GcHR0"
+TOKEN = "СЮДА_ВСТАВЬ_ТОКЕН"
 
 CITIES = {
     "москва": "moskva",
@@ -15,8 +16,18 @@ CITIES = {
     "екатеринбург": "ekaterinburg",
     "новосибирск": "novosibirsk",
     "краснодар": "krasnodar",
-    "владивосток": "vladivostok"
+    "владивосток": "vladivostok",
+    "киров": "kirov",
+    "ростов": "rostov"
 }
+
+def send_photo(chat_id, photo_url, caption):
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+        data = {"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+        requests.post(url, json=data, timeout=15)
+    except:
+        pass
 
 def send(chat_id, text):
     try:
@@ -27,27 +38,58 @@ def send(chat_id, text):
 
 def search_avito(query, city_code):
     url = f"https://www.avito.ru/{city_code}?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate"
+    }
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        ids = re.findall(r'itemId-(\d+)', r.text)
-        prices = re.findall(r'<span[^>]*itemprop="price"[^>]*content="(\d+)"', r.text)
+        r.encoding = 'utf-8'
+        html = r.text
+        
+        # Полный разбор страницы
+        item_ids = re.findall(r'data-item-id="(\d+)"', html)
+        if not item_ids:
+            item_ids = re.findall(r'/item_(\d+)', html)
+        if not item_ids:
+            item_ids = re.findall(r'itemId-(\d+)', html)
+        
+        prices = re.findall(r'<span[^>]*itemprop="price"[^>]*content="(\d+)"', html)
+        titles = re.findall(r'<h3[^>]*itemprop="name"[^>]*>(.*?)</h3>', html)
+        if not titles:
+            titles = re.findall(r'<a[^>]*itemprop="url"[^>]*><span>(.*?)</span></a>', html)
+        if not titles:
+            titles = re.findall(r'<h3[^>]*>(.*?)</h3>', html)
+        
+        is_new = re.findall(r'Новый', html)
+        photos = re.findall(r'<img[^>]*src="(https://[^"]+\.(jpg|png|jpeg))"', html)
         
         ads = []
-        for i in range(min(len(ids), 15)):
+        for i in range(min(len(item_ids), 10)):
             price = int(prices[i]) if i < len(prices) else 0
+            title = re.sub(r'<[^>]+>', '', titles[i])[:70] if i < len(titles) else "Товар"
+            condition = "🆕 Новый" if is_new else "📦 Б/У"
+            photo = photos[i][0] if i < len(photos) else None
+            
             ads.append({
                 "price": price,
-                "url": f"https://www.avito.ru/{city_code}/{ids[i]}"
+                "url": f"https://www.avito.ru/{city_code}/{item_ids[i]}",
+                "title": title,
+                "condition": condition,
+                "photo": photo
             })
+        
         ads.sort(key=lambda x: x["price"])
         return ads[:5]
-    except:
+    except Exception as e:
+        print(f"Ошибка парсинга: {e}")
         return []
 
 def main():
     last_id = 0
-    print("✅ Бот запущен!")
+    print("✅ Бот запущен! Ищу на Авито...")
     
     while True:
         try:
@@ -63,7 +105,7 @@ def main():
                         text = msg.get("text", "").strip().lower()
                         
                         if text == "/start":
-                            send(chat_id, "🔍 <b>Avito Hunter</b>\n\nНапиши: <b>диваны москва</b>\n<b>айфон спб</b>\n\n🏆 Самые дешёвые — первыми!")
+                            send(chat_id, "🔍 <b>Avito Hunter</b>\n\n📸 Фото объявлений\n🏷️ Состояние (новое/б/у)\n💰 Сортировка по цене\n\n📝 <b>Примеры:</b>\nдиваны москва\nайфон спб\nмашина казань")
                         
                         elif text.startswith("/"):
                             pass
@@ -87,15 +129,20 @@ def main():
                             ads = search_avito(query, city_code)
                             
                             if ads:
-                                msg = f"🏆 <b>САМЫЕ ВЫГОДНЫЕ {query.upper()} В {city_name.upper()}</b>\n\n"
                                 for i, ad in enumerate(ads, 1):
-                                    price = f"{ad['price']:,} ₽" if ad['price'] > 0 else "Цена не указана"
-                                    msg += f"{i}. 💰 <b>{price}</b>\n🔗 {ad['url']}\n\n"
-                                send(chat_id, msg)
+                                    price_text = f"{ad['price']:,} ₽" if ad['price'] > 0 else "Цена не указана"
+                                    caption = f"🏆 <b>{ad['title']}</b>\n\n💰 <b>{price_text}</b>\n📋 {ad['condition']}\n🔗 <a href='{ad['url']}'>Открыть объявление</a>"
+                                    
+                                    if ad['photo']:
+                                        send_photo(chat_id, ad['photo'], caption)
+                                    else:
+                                        send(chat_id, caption)
+                                    time.sleep(0.5)
                             else:
-                                send(chat_id, f"❌ Ничего не найдено для <b>{query}</b> в <b>{city_name}</b>")
+                                send(chat_id, f"❌ Ничего не найдено для <b>{query}</b> в <b>{city_name}</b>\nПопробуй другой запрос или город.")
             time.sleep(0.5)
-        except:
+        except Exception as e:
+            print(f"Ошибка: {e}")
             time.sleep(5)
 
 app = Flask(__name__)
@@ -116,5 +163,6 @@ if __name__ == "__main__":
     if TOKEN == "СЮДА_ВСТАВЬ_ТОКЕН":
         print("❌ Вставь свой токен в код!")
     else:
+        print("🔥 Avito Hunter запущен!")
         Thread(target=run_flask).start()
         main()
