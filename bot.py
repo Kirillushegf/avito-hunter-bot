@@ -5,7 +5,7 @@ import os
 from flask import Flask
 from threading import Thread
 
-TOKEN = "СЮДА_ВСТАВЬ_ТОКЕН"
+TOKEN = "8911252420:AAGZ2DrDreC8qSOr7Lyr5Azph60bU4GcHR0"
 
 CITIES = {
     "москва": "moskva",
@@ -160,7 +160,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    if TOKEN == "СЮДА_ВСТАВЬ_ТОКЕН":
+    if TOKEN == "8911252420:AAGZ2DrDreC8qSOr7Lyr5Azph60bU4GcHR0":
         print("❌ Вставь токен")
     else:
         Thread(target=run_flask).start()
